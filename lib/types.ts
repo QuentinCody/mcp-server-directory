@@ -55,6 +55,16 @@ export interface FilterOptions {
   deployment: ServerDeployment[]
 }
 
+export interface PaginationResult<T> {
+  data: T[]
+  total: number
+  page: number
+  pageSize: number
+  totalPages: number
+  hasNext: boolean
+  hasPrev: boolean
+}
+
 export type SortOption = "name-asc" | "name-desc" | "tools-asc" | "tools-desc" | "updated-asc" | "updated-desc"
 
 // For Supabase table mapping

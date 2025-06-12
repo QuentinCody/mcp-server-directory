@@ -17,23 +17,21 @@ const octokit = new Octokit({
   auth: process.env.GITHUB_ACCESS_TOKEN,
 })
 
-function decodeBase64(encoded: string): string {
-  return Buffer.from(encoded, "base64").toString("utf-8")
-}
+const MANIFEST_FILES = ["mcp.json", ".mcp.json", "package.json"]
 
-const MANIFEST_FILES = ["mcp.json", "mcp-manifest.json", ".mcp/config.json", "manifest.json"]
+function decodeBase64(content: string): string {
+  return Buffer.from(content, "base64").toString("utf-8")
+}
 
 async function fetchRepoContent(owner: string, repo: string, path: string): Promise<any | null> {
   try {
-    const response = await octokit.rest.repos.getContent({ owner, repo, path })
-    if (response.data && "content" in response.data && response.data.content) {
-      const content = decodeBase64(response.data.content)
+    const { data } = await octokit.rest.repos.getContent({ owner, repo, path })
+    if ("content" in data && data.content) {
+      const content = decodeBase64(data.content)
       return JSON.parse(content)
     }
-  } catch (error: any) {
-    if (error.status !== 404) {
-      console.warn(`Error fetching content at ${owner}/${repo}/${path}:`, error.message)
-    }
+  } catch {
+    // File doesn't exist or can't be parsed
   }
   return null
 }
@@ -248,23 +246,20 @@ export async function submitMCPServerFromGitHub(
 
     if (insertError) {
       console.error("Supabase insert error:", insertError)
-      return { message: "Database Error.", error: `Could not submit server: ${insertError.message}`, success: false }
+      return { message: "Database Error.", error: "Could not insert server into database.", success: false }
     }
 
     revalidatePath("/")
-    // We don't know the new ID here unless we select it back, so revalidating specific path is harder.
-    // Revalidating '/' should be enough for the list to update.
-
     return {
-      message: `Successfully submitted "${serverToInsert.name}" from GitHub! It should appear in the directory shortly.`,
+      message: "Server successfully added to the directory!",
       success: true,
-      extractedData: { name: serverToInsert.name, ...serverToInsert },
+      extractedData: serverToInsert,
     }
   } catch (error: any) {
-    console.error(`Submission error for ${githubUrl}:`, error)
+    console.error("Error in submitMCPServerFromGitHub:", error.message)
     return {
       message: "Failed to process repository.",
-      error: error.message || "An unknown error occurred.",
+      error: error.message,
       success: false,
     }
   }

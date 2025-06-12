@@ -1,115 +1,139 @@
 "use client"
 
-import { useActionState, useEffect, useRef } from "react" // Changed from "react-dom"
-import { useFormStatus } from "react-dom" // useFormStatus is still from "react-dom"
-import { submitMCPServerFromGitHub, type SubmitFromGitHubState } from "@/app/submit/actions"
+import { useState } from "react"
+import { SubmitFromGitHubState, submitMCPServerFromGitHub } from "@/app/submit/actions"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { CheckCircle, AlertCircle, Loader2, Github, Info } from "lucide-react"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
+import { CheckCircle, XCircle, Loader2, ExternalLink } from "lucide-react"
 
-function SubmitButton() {
-  const { pending } = useFormStatus() // useFormStatus is correct for components inside the form
-  return (
-    <Button type="submit" disabled={pending} className="w-full">
-      {pending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-      Process Repository
-    </Button>
-  )
+const initialState: SubmitFromGitHubState = {
+  message: "",
+  success: false,
 }
 
 export function GitHubSubmissionForm() {
-  const initialState: SubmitFromGitHubState = { message: "", success: false }
-  // Updated to use React.useActionState
-  // It returns [state, formAction, isPending]
-  // We can use the isPending from here if needed, or keep using useFormStatus in SubmitButton
-  const [state, formAction, isPending] = useActionState(submitMCPServerFromGitHub, initialState)
-  const formRef = useRef<HTMLFormElement>(null)
+  const [state, setState] = useState<SubmitFromGitHubState>(initialState)
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
-  useEffect(() => {
-    if (state.success) {
-      formRef.current?.reset()
+  const handleSubmit = async (formData: FormData) => {
+    setIsSubmitting(true)
+    try {
+      const result = await submitMCPServerFromGitHub(state, formData)
+      setState(result)
+    } catch (error) {
+      setState({
+        message: "An unexpected error occurred.",
+        error: error instanceof Error ? error.message : "Unknown error",
+        success: false,
+      })
+    } finally {
+      setIsSubmitting(false)
     }
-  }, [state.success])
+  }
 
   return (
-    <form action={formAction} ref={formRef} className="space-y-6">
-      <div>
-        <Label htmlFor="githubUrl" className="sr-only">
-          GitHub Repository URL
-        </Label>
-        <div className="relative">
-          <Github className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
+    <div className="space-y-6">
+      <form action={handleSubmit} className="space-y-4">
+        <div className="grid w-full items-center gap-1.5">
+          <Label htmlFor="githubUrl">GitHub Repository URL</Label>
           <Input
+            type="url"
             id="githubUrl"
             name="githubUrl"
-            type="url"
-            placeholder="https://github.com/user/repo"
+            placeholder="https://github.com/username/mcp-server-repo"
             required
-            className="pl-10"
-            defaultValue={state.success ? "" : undefined}
+            disabled={isSubmitting}
           />
         </div>
-      </div>
-
-      {/* SubmitButton uses useFormStatus internally, which is fine.
-          Alternatively, we could pass `isPending` from useActionState to it.
-          For simplicity and idiomatic use of useFormStatus, we'll keep SubmitButton as is.
-      */}
-      <SubmitButton />
+        <Button type="submit" disabled={isSubmitting} className="w-full">
+          {isSubmitting ? (
+            <>
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              Processing...
+            </>
+          ) : (
+            "Extract & Submit"
+          )}
+        </Button>
+      </form>
 
       {state.message && (
-        <Alert
-          variant={state.success ? "default" : "destructive"}
-          className={state.success ? "bg-green-50 border-green-300 dark:bg-green-900/30 dark:border-green-700" : ""}
-        >
-          {state.success ? (
-            <CheckCircle className="h-4 w-4 text-green-600 dark:text-green-400" />
-          ) : (
-            <AlertCircle className="h-4 w-4" />
+        <Alert variant={state.success ? "default" : "destructive"}>
+          <div className="flex items-center">
+            {state.success ? (
+              <CheckCircle className="h-4 w-4 mr-2 text-green-600" />
+            ) : (
+              <XCircle className="h-4 w-4 mr-2 text-red-600" />
+            )}
+            <AlertDescription>{state.message}</AlertDescription>
+          </div>
+          {state.error && (
+            <AlertDescription className="mt-2 text-sm text-red-600">Error: {state.error}</AlertDescription>
           )}
-          <AlertTitle>{state.success ? "Processing Complete!" : "Error"}</AlertTitle>
-          <AlertDescription>{state.error || state.message}</AlertDescription>
-        </Alert>
-      )}
-      {state.success && state.extractedData && (
-        <Alert variant="default" className="mt-4">
-          <Info className="h-4 w-4" />
-          <AlertTitle>Extracted Information Preview</AlertTitle>
-          <AlertDescription className="text-xs space-y-1">
-            <p>
-              <strong>Name:</strong> {state.extractedData.name}
-            </p>
-            <p>
-              <strong>Author:</strong> {state.extractedData.author}
-            </p>
-            <p>
-              <strong>Description:</strong> {state.extractedData.description || "N/A"}
-            </p>
-            <p>
-              <strong>Tools:</strong> {state.extractedData.toolsCount}, <strong>Auth:</strong>{" "}
-              {state.extractedData.authentication}, <strong>Deploy:</strong> {state.extractedData.deployment}
-            </p>
-            <p className="mt-2 italic">
-              This server has been added to the directory. Some details might be inferred or default.
-            </p>
-          </AlertDescription>
         </Alert>
       )}
 
-      <div className="text-xs text-muted-foreground space-y-2 pt-4 border-t">
-        <p>We'll try our best to extract MCP server details from your repository's README or any `mcp.json` file.</p>
-        <p>
-          <strong>Example (with JSON in README):</strong> https://github.com/vercel/ai
-        </p>
-        <p>
-          <strong>Example (basic repo):</strong> https://github.com/shadcn/ui
-        </p>
-        <p>
-          <strong>Example (empty repo):</strong> https://github.com/someuser/empty-repo
-        </p>
-      </div>
-    </form>
+      {state.extractedData && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">Extracted Data</CardTitle>
+            <CardDescription>Here's what we found in your repository:</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+              <div>
+                <strong>Name:</strong> {state.extractedData.name}
+              </div>
+              <div>
+                <strong>Author:</strong> {state.extractedData.author}
+              </div>
+              <div className="md:col-span-2">
+                <strong>Description:</strong> {state.extractedData.description || "No description found"}
+              </div>
+              <div>
+                <strong>Tools:</strong> {state.extractedData.tools_count}, <strong>Auth:</strong>{" "}
+                <Badge variant="outline">{state.extractedData.authentication || "Unknown"}</Badge>
+              </div>
+              <div>
+                <strong>Deployment:</strong>{" "}
+                <Badge variant="outline">{state.extractedData.deployment || "Unknown"}</Badge>
+              </div>
+              {state.extractedData.location && (
+                <div>
+                  <strong>Location:</strong> {state.extractedData.location}
+                </div>
+              )}
+              {state.extractedData.tags && state.extractedData.tags.length > 0 && (
+                <div className="md:col-span-2">
+                  <strong>Tags:</strong>{" "}
+                  {state.extractedData.tags.map((tag) => (
+                    <Badge key={tag} variant="secondary" className="mr-1">
+                      {tag}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+              {state.extractedData.icon_url && (
+                <div className="md:col-span-2">
+                  <strong>Icon URL:</strong>{" "}
+                  <a
+                    href={state.extractedData.icon_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-600 hover:underline inline-flex items-center"
+                  >
+                    {state.extractedData.icon_url} <ExternalLink className="w-3 h-3 ml-1" />
+                  </a>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
   )
 }

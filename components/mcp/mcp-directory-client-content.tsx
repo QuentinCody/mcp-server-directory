@@ -1,8 +1,8 @@
 "use client"
 
 import type React from "react"
-import { useCallback } from "react" // Removed useState and useEffect
-import type { MCPServer, FilterOptions, SortOption, ServerAuthentication, ServerDeployment } from "@/lib/types"
+import { useCallback, useState, useEffect } from "react"
+import type { MCPServer, FilterOptions, SortOption, ServerAuthentication, ServerDeployment, PaginationResult } from "@/lib/types"
 import { ServerCard } from "@/components/mcp/server-card"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
@@ -10,6 +10,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination"
 import { Search, FilterIcon, X } from "lucide-react"
 import { useRouter, usePathname, useSearchParams } from "next/navigation"
 import { useDebouncedCallback } from "use-debounce"
@@ -18,7 +27,7 @@ const AUTH_OPTIONS: ServerAuthentication[] = ["Public", "API Key", "OAuth", "Pri
 const DEPLOYMENT_OPTIONS: ServerDeployment[] = ["Local", "Remote", "Cloud-Hosted", "Unknown"]
 
 interface MCPDirectoryClientContentProps {
-  initialServers: MCPServer[]
+  paginationResult: PaginationResult<MCPServer>
   // Initial props are used for the first server-side render.
   // The client will then rely solely on the URL state.
   initialSearchTerm?: string
@@ -27,7 +36,7 @@ interface MCPDirectoryClientContentProps {
 }
 
 export function MCPDirectoryClientContent({
-  initialServers,
+  paginationResult,
 }: // We no longer need to pass initial props down, as the URL is the source of truth.
 MCPDirectoryClientContentProps) {
   const router = useRouter()
@@ -36,61 +45,135 @@ MCPDirectoryClientContentProps) {
 
   // DERIVE state directly from URL search params on every render.
   // This is the single source of truth on the client.
-  const searchTerm = searchParams.get("search") || ""
+  const urlSearchTerm = searchParams.get("search") || ""
   const filters: FilterOptions = {
     authentication: searchParams.getAll("auth") as ServerAuthentication[],
     deployment: searchParams.getAll("deploy") as ServerDeployment[],
   }
   const sortOption = (searchParams.get("sort") as SortOption) || "updated-desc"
+  const currentPage = parseInt(searchParams.get("page") || "1", 10)
+
+  // Local state for search input to ensure immediate responsiveness
+  const [localSearchTerm, setLocalSearchTerm] = useState(urlSearchTerm)
+
+  // Sync local state with URL when URL changes (e.g., back/forward navigation)
+  useEffect(() => {
+    setLocalSearchTerm(urlSearchTerm)
+  }, [urlSearchTerm])
 
   // This function builds the new query string and navigates.
   // It's wrapped in useCallback to stabilize its identity.
   const updateUrl = useCallback(
-    (newSearch: string, newFilters: FilterOptions, newSort: SortOption) => {
-      const params = new URLSearchParams(searchParams.toString())
+    (newSearch: string, newFilters: FilterOptions, newSort: SortOption, newPage = 1) => {
+      const params = new URLSearchParams()
+      
       if (newSearch) {
         params.set("search", newSearch)
-      } else {
-        params.delete("search")
       }
 
-      params.delete("auth")
       newFilters.authentication.forEach((auth) => params.append("auth", auth))
-
-      params.delete("deploy")
       newFilters.deployment.forEach((deploy) => params.append("deploy", deploy))
 
-      params.set("sort", newSort)
+      if (newSort !== "updated-desc") {
+        params.set("sort", newSort)
+      }
 
-      router.push(`${pathname}?${params.toString()}`, { scroll: false })
+      if (newPage > 1) {
+        params.set("page", newPage.toString())
+      }
+
+      const newUrl = params.toString() ? `${pathname}?${params.toString()}` : pathname
+      router.push(newUrl)
     },
-    [pathname, router, searchParams],
+    [pathname, router],
   )
 
-  const debouncedUpdateUrl = useDebouncedCallback(updateUrl, 300)
+  // Debounced function for search updates - increased delay for fast typists
+  const debouncedSearchUpdate = useDebouncedCallback((searchValue: string) => {
+    updateUrl(searchValue, filters, sortOption, 1)
+  }, 500) // Increased to 500ms to prevent character loss during fast typing
 
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    // We pass the current filters and sort options along with the new search term.
-    debouncedUpdateUrl(e.target.value, filters, sortOption)
+    const newValue = e.target.value
+    // Update local state immediately for responsive UI
+    setLocalSearchTerm(newValue)
+    // Trigger debounced server update
+    debouncedSearchUpdate(newValue)
   }
 
   const handleFilterChange = (type: keyof FilterOptions, value: string) => {
     const newFilters = { ...filters }
-    const currentValues = newFilters[type] as string[]
-    const updatedValues = currentValues.includes(value)
-      ? currentValues.filter((v) => v !== value)
-      : [...currentValues, value]
-    newFilters[type] = updatedValues
-    updateUrl(searchTerm, newFilters, sortOption)
+    if (type === "authentication") {
+      const currentValues = newFilters.authentication
+      const updatedValues = currentValues.includes(value as ServerAuthentication)
+        ? currentValues.filter((v) => v !== value)
+        : [...currentValues, value as ServerAuthentication]
+      newFilters.authentication = updatedValues
+    } else if (type === "deployment") {
+      const currentValues = newFilters.deployment
+      const updatedValues = currentValues.includes(value as ServerDeployment)
+        ? currentValues.filter((v) => v !== value)
+        : [...currentValues, value as ServerDeployment]
+      newFilters.deployment = updatedValues
+    }
+    // Reset to page 1 when filtering
+    updateUrl(urlSearchTerm, newFilters, sortOption, 1)
   }
 
   const handleSortChange = (newSort: SortOption) => {
-    updateUrl(searchTerm, filters, newSort)
+    // Reset to page 1 when sorting
+    updateUrl(urlSearchTerm, filters, newSort, 1)
+  }
+
+  const handlePageChange = (newPage: number) => {
+    updateUrl(urlSearchTerm, filters, sortOption, newPage)
   }
 
   const clearFilters = () => {
     const newFilters = { authentication: [], deployment: [] }
-    updateUrl(searchTerm, newFilters, sortOption)
+    updateUrl(urlSearchTerm, newFilters, sortOption, 1)
+  }
+
+  const generatePageNumbers = () => {
+    const { page, totalPages } = paginationResult
+    const pages: (number | "ellipsis")[] = []
+
+    if (totalPages <= 7) {
+      // Show all pages if 7 or fewer
+      for (let i = 1; i <= totalPages; i++) {
+        pages.push(i)
+      }
+    } else {
+      // Always show first page
+      pages.push(1)
+
+      if (page <= 4) {
+        // Show pages 2, 3, 4, 5, ..., last
+        for (let i = 2; i <= Math.min(5, totalPages - 1); i++) {
+          pages.push(i)
+        }
+        if (totalPages > 5) {
+          pages.push("ellipsis")
+        }
+        pages.push(totalPages)
+      } else if (page >= totalPages - 3) {
+        // Show 1, ..., last-4, last-3, last-2, last-1, last
+        pages.push("ellipsis")
+        for (let i = Math.max(2, totalPages - 4); i <= totalPages; i++) {
+          pages.push(i)
+        }
+      } else {
+        // Show 1, ..., page-1, page, page+1, ..., last
+        pages.push("ellipsis")
+        for (let i = page - 1; i <= page + 1; i++) {
+          pages.push(i)
+        }
+        pages.push("ellipsis")
+        pages.push(totalPages)
+      }
+    }
+
+    return pages
   }
 
   return (
@@ -151,10 +234,8 @@ MCPDirectoryClientContentProps) {
               type="search"
               placeholder="Search servers by name, author, description, or tags..."
               className="pl-10 w-full"
-              // The input value is now uncontrolled on the client and driven by the debounced URL update.
-              // We can set a key to force re-mount when search term changes from URL, or use defaultValue.
-              key={searchTerm}
-              defaultValue={searchTerm}
+              // Use local state for immediate responsiveness
+              value={localSearchTerm}
               onChange={handleSearchChange}
             />
           </div>
@@ -167,18 +248,86 @@ MCPDirectoryClientContentProps) {
               <SelectItem value="updated-asc">Last Updated (Oldest)</SelectItem>
               <SelectItem value="name-asc">Name (A-Z)</SelectItem>
               <SelectItem value="name-desc">Name (Z-A)</SelectItem>
-              <SelectItem value="tools-desc">Tools (Most)</SelectItem>
-              <SelectItem value="tools-asc">Tools (Fewest)</SelectItem>
             </SelectContent>
           </Select>
         </div>
 
-        {initialServers.length > 0 ? (
-          <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-            {initialServers.map((server) => (
-              <ServerCard key={server.id} server={server} />
-            ))}
-          </div>
+        {/* Results summary */}
+        <div className="mb-4 text-sm text-muted-foreground">
+          Showing {paginationResult.data.length} of {paginationResult.total} servers
+          {paginationResult.totalPages > 1 && ` (Page ${paginationResult.page} of ${paginationResult.totalPages})`}
+        </div>
+
+        {paginationResult.data.length > 0 ? (
+          <>
+            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6 mb-8">
+              {paginationResult.data.map((server) => (
+                <ServerCard key={server.id} server={server} />
+              ))}
+            </div>
+
+            {/* Pagination controls */}
+            {paginationResult.totalPages > 1 && (
+              <Pagination>
+                <PaginationContent>
+                  <PaginationItem>
+                    {paginationResult.hasPrev ? (
+                      <PaginationPrevious
+                        href="#"
+                        onClick={(e) => {
+                          e.preventDefault()
+                          handlePageChange(currentPage - 1)
+                        }}
+                      />
+                    ) : (
+                      <PaginationPrevious
+                        href="#"
+                        onClick={(e) => e.preventDefault()}
+                        className="pointer-events-none opacity-50"
+                      />
+                    )}
+                  </PaginationItem>
+
+                  {generatePageNumbers().map((pageNum, index) => (
+                    <PaginationItem key={index}>
+                      {pageNum === "ellipsis" ? (
+                        <PaginationEllipsis />
+                      ) : (
+                        <PaginationLink
+                          href="#"
+                          onClick={(e) => {
+                            e.preventDefault()
+                            handlePageChange(pageNum)
+                          }}
+                          isActive={pageNum === currentPage}
+                        >
+                          {pageNum}
+                        </PaginationLink>
+                      )}
+                    </PaginationItem>
+                  ))}
+
+                  <PaginationItem>
+                    {paginationResult.hasNext ? (
+                      <PaginationNext
+                        href="#"
+                        onClick={(e) => {
+                          e.preventDefault()
+                          handlePageChange(currentPage + 1)
+                        }}
+                      />
+                    ) : (
+                      <PaginationNext
+                        href="#"
+                        onClick={(e) => e.preventDefault()}
+                        className="pointer-events-none opacity-50"
+                      />
+                    )}
+                  </PaginationItem>
+                </PaginationContent>
+              </Pagination>
+            )}
+          </>
         ) : (
           <div className="text-center py-12">
             <p className="text-xl text-muted-foreground">No servers found matching your criteria.</p>

@@ -27,14 +27,14 @@ export const extractedMCPServerSchema = z.object({
   deployment: z.enum(DEPLOYMENT_OPTIONS_EXTENDED).default("Unknown"),
   location: z.string().optional(),
   tags: z
-    .array(z.string())
+    .union([z.array(z.string()), z.string()])
     .default([])
     .optional()
-    .transform((val) =>
+    .transform((val): string[] =>
       typeof val === "string"
         ? val
             .split(",")
-            .map((tag) => tag.trim())
+            .map((tag: string) => tag.trim())
             .filter(Boolean)
         : val || [],
     ), // Handle if tags come as a string
@@ -62,7 +62,7 @@ export const githubUrlSchema = z.object({
     .string()
     .url("Please enter a valid URL.")
     .regex(
-      /^https?:\/\/github\.com\/[\w-]+\/[\w-.]+$/,
+      /^https?:\/\/github\.com\/[\w-]+\/[\w-.]+(?:\/.*)?$/,
       "Please enter a valid public GitHub repository URL (e.g., https://github.com/user/repo).",
     ),
 })

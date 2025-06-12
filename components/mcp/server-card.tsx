@@ -6,7 +6,7 @@ import type { MCPServer } from "@/lib/types" // MCPServer type now uses snake_ca
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { ArrowRight, Wrench, Lock, PresentationIcon as DeploymentIcon, User, CalendarDays, MapPin } from "lucide-react"
+import { ArrowRight, Lock, PresentationIcon as DeploymentIcon, User, CalendarDays, MapPin } from "lucide-react"
 
 interface ServerCardProps {
   server: MCPServer
@@ -60,10 +60,6 @@ export function ServerCard({ server }: ServerCardProps) {
         </CardDescription>
       </CardHeader>
       <CardContent className="flex-grow pb-4 space-y-3">
-        <div className="flex items-center text-sm text-muted-foreground">
-          <Wrench className="w-4 h-4 mr-2 flex-shrink-0" />
-          <span>{server.tools_count} Tools Available</span> {/* snake_case */}
-        </div>
         <div className="flex items-center text-sm text-muted-foreground">
           <Lock className="w-4 h-4 mr-2 flex-shrink-0" />
           <span>

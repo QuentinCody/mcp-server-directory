@@ -1,14 +1,18 @@
 import { createSupabaseServerClient } from "@/lib/supabase/server" // Use server client for RSC
-import type { MCPServer, FilterOptions, SortOption, ServerAuthentication, ServerDeployment } from "@/lib/types"
+import type { MCPServer, FilterOptions, SortOption, ServerAuthentication, ServerDeployment, PaginationResult } from "@/lib/types"
 import { MCPDirectoryClientContent } from "@/components/mcp/mcp-directory-client-content"
+
+const ITEMS_PER_PAGE = 12
 
 async function fetchMCPServersFromDB(
   searchTerm = "",
   filters: FilterOptions = { authentication: [], deployment: [] },
   sortOption: SortOption = "updated-desc",
-): Promise<MCPServer[]> {
-  const supabase = createSupabaseServerClient() // Use the server client for RSC
-  let query = supabase.from("mcp_servers").select("*")
+  page = 1,
+  pageSize = ITEMS_PER_PAGE,
+): Promise<PaginationResult<MCPServer>> {
+  const supabase = await createSupabaseServerClient() // Use the server client for RSC
+  let query = supabase.from("mcp_servers").select("*", { count: "exact" })
 
   // Search
   if (searchTerm) {
@@ -64,37 +68,60 @@ async function fetchMCPServersFromDB(
   }
   query = query.order(sortField, { ascending: sortAsc })
 
-  const { data, error } = await query
+  // Pagination
+  const from = (page - 1) * pageSize
+  const to = from + pageSize - 1
+  query = query.range(from, to)
+
+  const { data, error, count } = await query
 
   if (error) {
     console.error("Error fetching MCP servers:", error)
-    return []
+    return {
+      data: [],
+      total: 0,
+      page,
+      pageSize,
+      totalPages: 0,
+      hasNext: false,
+      hasPrev: false,
+    }
   }
-  // Map snake_case from DB to camelCase for MCPServer type if Supabase doesn't do it automatically
-  // However, Supabase client usually handles this mapping. If not, manual mapping is needed.
-  // For now, assuming Supabase client handles it or types are adjusted.
-  // Let's adjust the MCPServer type to use snake_case for DB fields for clarity.
-  return data as MCPServer[]
+  
+  const total = count || 0
+  const totalPages = Math.ceil(total / pageSize)
+
+  return {
+    data: (data as MCPServer[]) || [],
+    total,
+    page,
+    pageSize,
+    totalPages,
+    hasNext: page < totalPages,
+    hasPrev: page > 1,
+  }
 }
 
 export default async function MCPDirectoryPage({
   searchParams,
 }: {
-  searchParams?: { [key: string]: string | string[] | undefined }
+  searchParams?: Promise<{ [key: string]: string | string[] | undefined }>
 }) {
   // Parse searchParams for server-side filtering/sorting
-  const searchTerm = typeof searchParams?.search === "string" ? searchParams.search : ""
-  const authFilters = Array.isArray(searchParams?.auth)
-    ? (searchParams.auth as ServerAuthentication[])
-    : typeof searchParams?.auth === "string"
-      ? [searchParams.auth as ServerAuthentication]
+  const resolvedSearchParams = await searchParams
+  const searchTerm = typeof resolvedSearchParams?.search === "string" ? resolvedSearchParams.search : ""
+  const authFilters = resolvedSearchParams && Array.isArray(resolvedSearchParams.auth)
+    ? (resolvedSearchParams.auth as ServerAuthentication[])
+    : resolvedSearchParams && typeof resolvedSearchParams.auth === "string"
+      ? [resolvedSearchParams.auth as ServerAuthentication]
       : []
-  const deployFilters = Array.isArray(searchParams?.deploy)
-    ? (searchParams.deploy as ServerDeployment[])
-    : typeof searchParams?.deploy === "string"
-      ? [searchParams.deploy as ServerDeployment]
+  const deployFilters = resolvedSearchParams && Array.isArray(resolvedSearchParams.deploy)
+    ? (resolvedSearchParams.deploy as ServerDeployment[])
+    : resolvedSearchParams && typeof resolvedSearchParams.deploy === "string"
+      ? [resolvedSearchParams.deploy as ServerDeployment]
       : []
-  const sort = typeof searchParams?.sort === "string" ? (searchParams.sort as SortOption) : "updated-desc"
+  const sort = typeof resolvedSearchParams?.sort === "string" ? (resolvedSearchParams.sort as SortOption) : "updated-desc"
+  const page = typeof resolvedSearchParams?.page === "string" ? parseInt(resolvedSearchParams.page, 10) : 1
 
   const initialFilters: FilterOptions = {
     authentication: authFilters,
@@ -102,7 +129,7 @@ export default async function MCPDirectoryPage({
   }
 
   // Fetch initial data on the server
-  const initialServers = await fetchMCPServersFromDB(searchTerm, initialFilters, sort)
+  const paginationResult = await fetchMCPServersFromDB(searchTerm, initialFilters, sort, page, ITEMS_PER_PAGE)
 
   return (
     <div className="container mx-auto py-8 px-4">
@@ -111,7 +138,7 @@ export default async function MCPDirectoryPage({
         <p className="mt-2 text-lg text-muted-foreground">Discover and explore Model Context Protocol servers.</p>
       </div>
       <MCPDirectoryClientContent
-        initialServers={initialServers}
+        paginationResult={paginationResult}
         initialSearchTerm={searchTerm}
         initialFilters={initialFilters}
         initialSortOption={sort}

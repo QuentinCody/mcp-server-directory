@@ -24,7 +24,7 @@ import {
 import { notFound } from "next/navigation"
 
 async function fetchMCPServerById(id: string): Promise<MCPServer | null> {
-  const supabase = createSupabaseServerClient()
+  const supabase = await createSupabaseServerClient()
   const { data, error } = await supabase.from("mcp_servers").select("*").eq("id", id).single()
 
   if (error) {
