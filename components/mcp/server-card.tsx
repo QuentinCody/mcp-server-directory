@@ -2,11 +2,11 @@
 
 import Link from "next/link"
 import Image from "next/image"
-import type { MCPServer } from "@/lib/types"
+import type { MCPServer } from "@/lib/types" // MCPServer type now uses snake_case for some fields
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { ArrowRight, Wrench, Lock, PresentationIcon as DeploymentIcon, User, CalendarDays, MapPin } from "lucide-react" // Renamed ServerIcon to DeploymentIcon to avoid conflict
+import { ArrowRight, Wrench, Lock, PresentationIcon as DeploymentIcon, User, CalendarDays, MapPin } from "lucide-react"
 
 interface ServerCardProps {
   server: MCPServer
@@ -45,9 +45,9 @@ export function ServerCard({ server }: ServerCardProps) {
               <span>{server.author}</span>
             </div>
           </div>
-          {server.iconUrl && (
+          {server.icon_url && ( // snake_case
             <Image
-              src={server.iconUrl || "/placeholder.svg"}
+              src={server.icon_url || "/placeholder.svg"} // snake_case
               alt={`${server.name} icon`}
               width={48}
               height={48}
@@ -55,12 +55,14 @@ export function ServerCard({ server }: ServerCardProps) {
             />
           )}
         </div>
-        <CardDescription className="text-sm line-clamp-2">{server.description}</CardDescription>
+        <CardDescription className="text-sm line-clamp-2">
+          {server.description || "No description available."}
+        </CardDescription>
       </CardHeader>
       <CardContent className="flex-grow pb-4 space-y-3">
         <div className="flex items-center text-sm text-muted-foreground">
           <Wrench className="w-4 h-4 mr-2 flex-shrink-0" />
-          <span>{server.toolsCount} Tools Available</span>
+          <span>{server.tools_count} Tools Available</span> {/* snake_case */}
         </div>
         <div className="flex items-center text-sm text-muted-foreground">
           <Lock className="w-4 h-4 mr-2 flex-shrink-0" />
@@ -82,7 +84,7 @@ export function ServerCard({ server }: ServerCardProps) {
         )}
         <div className="flex items-center text-sm text-muted-foreground">
           <CalendarDays className="w-4 h-4 mr-2 flex-shrink-0" />
-          <span>Updated: {timeSinceUpdate(server.lastUpdated)}</span>
+          <span>Updated: {timeSinceUpdate(server.updated_at)}</span> {/* Use updated_at from DB */}
         </div>
         {server.tags && server.tags.length > 0 && (
           <div className="pt-1">

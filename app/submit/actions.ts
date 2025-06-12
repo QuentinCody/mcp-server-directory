@@ -1,28 +1,26 @@
 "use server"
 
 import { Octokit } from "octokit"
-import { githubUrlSchema, extractedMCPServerSchema } from "@/lib/schemas"
-import { addMCPServer, mcpServers } from "@/lib/mcp-data"
-import type { MCPServer, ExtractedMCPServerData } from "@/lib/types"
+import { githubUrlSchema, extractedMCPServerSchema } from "@/lib/schemas" // extractedMCPServerSchema is still useful for initial validation of parsed data
+import type { MCPServerInsert, ExtractedMCPServerData } from "@/lib/types"
 import { revalidatePath } from "next/cache"
+import { supabaseAdmin as supabase } from "@/lib/supabase/server" // Use the admin/direct client for server actions
 
 export interface SubmitFromGitHubState {
   message: string
   error?: string
   success: boolean
-  extractedData?: Partial<MCPServer>
+  extractedData?: Partial<MCPServerInsert> & { name?: string } // Reflects DB structure
 }
 
 const octokit = new Octokit({
   auth: process.env.GITHUB_ACCESS_TOKEN,
 })
 
-// Helper to decode base64 content
 function decodeBase64(encoded: string): string {
   return Buffer.from(encoded, "base64").toString("utf-8")
 }
 
-// List of potential manifest file names to check
 const MANIFEST_FILES = ["mcp.json", "mcp-manifest.json", ".mcp/config.json", "manifest.json"]
 
 async function fetchRepoContent(owner: string, repo: string, path: string): Promise<any | null> {
@@ -52,7 +50,6 @@ async function fetchAndParseGitHubRepo(repoUrl: string): Promise<Partial<Extract
   let extracted: Partial<ExtractedMCPServerData> = {}
 
   try {
-    // 1. Fetch basic repository details
     const { data: repoData } = await octokit.rest.repos.get({ owner, repo })
     extracted.name =
       repoData.name
@@ -60,22 +57,17 @@ async function fetchAndParseGitHubRepo(repoUrl: string): Promise<Partial<Extract
         .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
         .join(" ") || "Untitled Server"
     extracted.author = repoData.owner?.login || "Unknown Author"
-    extracted.description = repoData.description || undefined // Use repo description as a fallback
+    extracted.description = repoData.description || undefined
 
-    // 2. Try to fetch a dedicated manifest file (e.g., mcp.json)
     let manifestJson: any = null
     for (const manifestPath of MANIFEST_FILES) {
       manifestJson = await fetchRepoContent(owner, repo, manifestPath)
-      if (manifestJson) {
-        console.log(`Found manifest file at: ${manifestPath}`)
-        break
-      }
+      if (manifestJson) break
     }
 
     if (manifestJson) {
-      // If manifest found, use it as the primary source
       extracted = {
-        ...extracted, // Keep inferred name/author if not in JSON
+        ...extracted,
         name: manifestJson.name || extracted.name,
         author: manifestJson.author || extracted.author,
         description: manifestJson.description || extracted.description,
@@ -88,41 +80,35 @@ async function fetchAndParseGitHubRepo(repoUrl: string): Promise<Partial<Extract
         detailedInfo: manifestJson.detailedInfo,
       }
     } else {
-      // 3. If no manifest file, fetch and parse README
       let readmeContent = ""
       try {
         const { data: readmeData } = await octokit.rest.repos.getReadme({ owner, repo })
-        if (readmeData.content) {
-          readmeContent = decodeBase64(readmeData.content)
-        }
+        if (readmeData.content) readmeContent = decodeBase64(readmeData.content)
       } catch (e) {
-        console.warn(`Could not fetch README for ${owner}/${repo}.`)
+        /* ... */
       }
 
       if (readmeContent) {
-        // Try to find a JSON code block in README
         const jsonRegex = /```json\s*([\s\S]*?)\s*```/
         const match = readmeContent.match(jsonRegex)
         if (match && match[1]) {
           try {
             const readmeJson = JSON.parse(match[1])
-            console.log("Found JSON in README for " + repoUrl)
             extracted = {
+              /* ... merge readmeJson similar to manifestJson ... */
               ...extracted,
               name: readmeJson.name || extracted.name,
               author: readmeJson.author || extracted.author,
               description: readmeJson.description || extracted.description,
-              toolsCount: typeof readmeJson.toolsCount === "number" ? readmeJson.toolsCount : undefined,
-              authentication: readmeJson.authentication,
-              deployment: readmeJson.deployment,
-              location: readmeJson.location,
-              tags: readmeJson.tags,
-              iconUrl: readmeJson.iconUrl,
-              detailedInfo: readmeJson.detailedInfo,
+              toolsCount: typeof readmeJson.toolsCount === "number" ? readmeJson.toolsCount : extracted.toolsCount,
+              authentication: readmeJson.authentication || extracted.authentication,
+              deployment: readmeJson.deployment || extracted.deployment,
+              location: readmeJson.location || extracted.location,
+              tags: readmeJson.tags || extracted.tags,
+              iconUrl: readmeJson.iconUrl || extracted.iconUrl,
+              detailedInfo: readmeJson.detailedInfo || extracted.detailedInfo,
             }
           } catch (e) {
-            console.warn("Failed to parse JSON from README for " + repoUrl + ":", e)
-            // If JSON parsing fails, use README text for description if not already set by repoData.description
             if (!extracted.description && readmeContent) {
               const firstMeaningfulLine = readmeContent
                 .split("\n")
@@ -134,7 +120,6 @@ async function fetchAndParseGitHubRepo(repoUrl: string): Promise<Partial<Extract
             }
           }
         } else if (!extracted.description && readmeContent) {
-          // No JSON in README, use first meaningful line as description if not set
           const firstMeaningfulLine = readmeContent
             .split("\n")
             .find((line) => line.trim().length > 20 && !line.trim().startsWith("#"))
@@ -144,8 +129,7 @@ async function fetchAndParseGitHubRepo(repoUrl: string): Promise<Partial<Extract
           }
         }
 
-        // Very basic keyword spotting for tags (example)
-        if (!extracted.tags || extracted.tags.length === 0) {
+        if (!extracted.tags || (Array.isArray(extracted.tags) && extracted.tags.length === 0)) {
           const newTags: string[] = []
           if (
             readmeContent.toLowerCase().includes(" mcp ") ||
@@ -154,13 +138,12 @@ async function fetchAndParseGitHubRepo(repoUrl: string): Promise<Partial<Extract
             newTags.push("mcp")
           if (readmeContent.toLowerCase().includes(" ai ")) newTags.push("ai")
           if (readmeContent.toLowerCase().includes(" llm")) newTags.push("llm")
-          if (repoData.topics) newTags.push(...repoData.topics) // Add GitHub topics
+          if (repoData.topics) newTags.push(...repoData.topics)
           extracted.tags = Array.from(new Set(newTags))
         }
       }
     }
 
-    // Ensure tags are an array and clean them up
     if (typeof extracted.tags === "string") {
       extracted.tags = extracted.tags
         .split(",")
@@ -169,31 +152,19 @@ async function fetchAndParseGitHubRepo(repoUrl: string): Promise<Partial<Extract
     }
     extracted.tags = Array.from(new Set(extracted.tags || []))
 
-    // Validate the extracted data. Schema will apply defaults.
-    const validation = extractedMCPServerSchema.safeParse(extracted)
-    if (validation.success) {
-      return validation.data
-    } else {
-      console.warn(`Validation failed for extracted data from ${repoUrl}:`, validation.error.flatten())
-      // Return minimal valid data based on repo info if schema validation fails
-      return {
-        name: extracted.name || "Unknown Repo",
-        author: extracted.author || "Unknown Owner",
-        description: extracted.description || "Could not determine description.",
-      }
+    const validation = extractedMCPServerSchema.safeParse(extracted) // Use the Zod schema for initial validation
+    if (validation.success) return validation.data
+
+    return {
+      // Fallback if Zod validation fails
+      name: extracted.name || "Unknown Repo",
+      author: extracted.author || "Unknown Owner",
+      description: extracted.description || "Could not determine description.",
     }
   } catch (error: any) {
+    /* ... error handling ... */
     console.error(`Error processing repository ${owner}/${repo}:`, error.message)
-    // Fallback if API calls fail catastrophically
-    return {
-      name:
-        repo
-          .split(/[-_]/)
-          .map((w) => w[0].toUpperCase() + w.slice(1))
-          .join(" ") || "Error Processing Repo",
-      author: owner || "Unknown Owner",
-      description: `Failed to fetch details: ${error.message}`,
-    }
+    throw new Error(`Failed to process repository ${owner}/${repo}: ${error.message}`)
   }
 }
 
@@ -208,11 +179,11 @@ export async function submitMCPServerFromGitHub(
       success: false,
     }
   }
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+    return { message: "Database Error.", error: "Supabase environment variables are not configured.", success: false }
+  }
 
-  const urlValidationResult = githubUrlSchema.safeParse({
-    githubUrl: formData.get("githubUrl"),
-  })
-
+  const urlValidationResult = githubUrlSchema.safeParse({ githubUrl: formData.get("githubUrl") })
   if (!urlValidationResult.success) {
     return {
       message: "Invalid GitHub URL.",
@@ -223,63 +194,77 @@ export async function submitMCPServerFromGitHub(
 
   const { githubUrl } = urlValidationResult.data
 
-  if (mcpServers.some((server) => server.githubUrl === githubUrl)) {
-    return {
-      message: "This repository has already been submitted.",
-      success: false,
-    }
+  // Check if already submitted
+  const { data: existingServer, error: selectError } = await supabase
+    .from("mcp_servers")
+    .select("id")
+    .eq("github_url", githubUrl)
+    .maybeSingle()
+
+  if (selectError) {
+    console.error("Supabase select error:", selectError)
+    return { message: "Database Error.", error: "Could not check for existing server.", success: false }
+  }
+  if (existingServer) {
+    return { message: "This repository has already been submitted.", success: false }
   }
 
   try {
     const extractedData = await fetchAndParseGitHubRepo(githubUrl)
-    const finalDataValidation = extractedMCPServerSchema.safeParse(extractedData) // Schema applies defaults
 
+    // Validate with Zod schema which applies defaults
+    const finalDataValidation = extractedMCPServerSchema.safeParse(extractedData)
     if (!finalDataValidation.success) {
       console.error(`Final validation of extracted data failed for ${githubUrl}:`, finalDataValidation.error.flatten())
       return {
-        message: "Could not extract enough valid information from the repository.",
+        message: "Could not extract enough valid information.",
         error: "Please ensure the repository is public and contains recognizable information.",
         success: false,
       }
     }
-
     const serverDataFromRepo = finalDataValidation.data
 
-    const id = `${serverDataFromRepo.name
-      .toLowerCase()
-      .replace(/\s+/g, "-")
-      .replace(/[^\w-]/g, "")}-${Date.now().toString().slice(-5)}`
-
-    const newServer: MCPServer = {
-      id,
+    const serverToInsert: MCPServerInsert = {
       name: serverDataFromRepo.name,
       author: serverDataFromRepo.author,
       description: serverDataFromRepo.description,
-      toolsCount: serverDataFromRepo.toolsCount,
-      authentication: serverDataFromRepo.authentication,
-      deployment: serverDataFromRepo.deployment,
+      tools_count: serverDataFromRepo.toolsCount || 0,
+      authentication: serverDataFromRepo.authentication || "Unknown",
+      deployment: serverDataFromRepo.deployment || "Unknown",
       location: serverDataFromRepo.location,
       tags: serverDataFromRepo.tags || [],
-      iconUrl: serverDataFromRepo.iconUrl,
-      detailedInfo: serverDataFromRepo.detailedInfo || { statistics: {} },
-      githubUrl,
-      lastUpdated: new Date().toISOString(),
+      icon_url: serverDataFromRepo.iconUrl,
+      github_url: githubUrl,
+      detailed_info_statistics_requests_per_month: serverDataFromRepo.detailedInfo?.statistics?.requestsPerMonth,
+      detailed_info_statistics_uptime: serverDataFromRepo.detailedInfo?.statistics?.uptime,
+      detailed_info_statistics_average_response_time: serverDataFromRepo.detailedInfo?.statistics?.averageResponseTime,
+      detailed_info_capabilities: serverDataFromRepo.detailedInfo?.capabilities,
+      detailed_info_documentation_url: serverDataFromRepo.detailedInfo?.documentationUrl,
+      detailed_info_usage_instructions: serverDataFromRepo.detailedInfo?.usageInstructions,
+      last_fetched_from_github_at: new Date().toISOString(),
     }
 
-    addMCPServer(newServer) // Still using in-memory for this example
+    const { error: insertError } = await supabase.from("mcp_servers").insert(serverToInsert)
+
+    if (insertError) {
+      console.error("Supabase insert error:", insertError)
+      return { message: "Database Error.", error: `Could not submit server: ${insertError.message}`, success: false }
+    }
+
     revalidatePath("/")
-    revalidatePath(`/servers/${id}`)
+    // We don't know the new ID here unless we select it back, so revalidating specific path is harder.
+    // Revalidating '/' should be enough for the list to update.
 
     return {
-      message: `Successfully processed "${newServer.name}" from GitHub! Check the directory. Information quality depends on repository content.`,
+      message: `Successfully submitted "${serverToInsert.name}" from GitHub! It should appear in the directory shortly.`,
       success: true,
-      extractedData: newServer,
+      extractedData: { name: serverToInsert.name, ...serverToInsert },
     }
   } catch (error: any) {
     console.error(`Submission error for ${githubUrl}:`, error)
     return {
       message: "Failed to process repository.",
-      error: error.message || "An unknown error occurred during processing.",
+      error: error.message || "An unknown error occurred.",
       success: false,
     }
   }
